@@ -1,3 +1,5 @@
+/* eslint-disable prettier/prettier */
+
 // import jwt from "jsonwebtoken";
 import { prisma } from '@/prisma/client';
 import { verifyAccessToken } from '@/utils/jwt';
@@ -23,6 +25,7 @@ export default async function Auth(
       where: {
         id: decodedToken?.sub,
       },
+      include: { address: true, wallets: true },
     });
 
     if (!user) throw new Error('Authentication failed!');

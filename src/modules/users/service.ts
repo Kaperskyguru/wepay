@@ -105,6 +105,46 @@ export async function validateBVN(bvn: string) {
   return !!existing;
 }
 
+export async function getUserByPhone(phone: string) {
+  if (!phone) throw new CustomError('Phone Number is required', 422);
+
+  const user = await prisma.user.findFirst({
+    where: { phone: phone },
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      name: true,
+      isLocked: true,
+      status: true,
+    },
+  });
+
+  if (!user) throw new CustomError('User not found', 404);
+
+  return user;
+}
+
+export async function getUserByID(ID: string) {
+  if (!ID) throw new CustomError('Wepay ID is required', 422);
+
+  const user = await prisma.user.findFirst({
+    where: { uniqueID: ID },
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      name: true,
+      isLocked: true,
+      status: true,
+    },
+  });
+
+  if (!user) throw new CustomError('User not found', 404);
+
+  return user;
+}
+
 export async function addPassword(id: string, password: string) {
   if (password !== undefined)
     throw new CustomError('Password is required', 422);
@@ -159,38 +199,35 @@ export async function addVerification(id: string, data: any) {
 export async function createPin(id: string, payload: { pin: string }) {
   const hashedPin = await hashPin(payload.pin);
 
-  const user = await prisma.$transaction(async (tx) => {
-    const user = await prisma.user.update({
-      where: { id },
-      data: {
-        pin: hashedPin,
-      },
-      include: { address: true },
-    });
-    console.log(user);
-    if (user.embedlyCustomerId) return user;
-
-    await tx.outboxEvent.create({
-      data: {
-        aggregateId: user.id,
-        topic: 'embedly.user.wallet.creation.initiated',
-        payload: {
-          userId: user.id,
-          streetLine: user?.address?.streetLine,
-          city: user.address?.city,
-          country: user.address?.country,
-          dob: user.dob,
-          name: user.name,
-          phone: user.phone,
-          email: user.email,
-          bvn: user.bvn,
-        },
-      },
-    });
-    return user;
+  const user = await prisma.user.update({
+    where: { id },
+    data: {
+      pin: hashedPin,
+    },
+    include: { address: true },
   });
 
-  if (!user.embedlyCustomerId) await Queue.trigger(user.id, 'CREATEWALLET');
+  if (user.embedlyCustomerId && !user?.address?.streetLine) return user;
+
+  // Trigger wallet creation
+  await prisma.outboxEvent.create({
+    data: {
+      aggregateId: user.id,
+      topic: 'embedly.user.wallet.creation.initiated',
+      payload: {
+        userId: user.id,
+        streetLine: user?.address?.streetLine,
+        city: user.address?.city,
+        country: user.address?.country,
+        dob: user.dob,
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        bvn: user.bvn,
+      },
+    },
+  });
+  await Queue.trigger(user.id, 'CREATEWALLET');
 
   return user;
 }
@@ -203,6 +240,7 @@ export async function verifyUserPin(
 }
 
 export async function createEmbedlyUser(userId: string, data: EmbedlyInput) {
+  console.log(data, 'createEmbedlyUser');
   const embedly = await Embedly.customers.personal({
     address: data?.embedly?.address,
     city: data?.embedly?.city,
@@ -215,12 +253,14 @@ export async function createEmbedlyUser(userId: string, data: EmbedlyInput) {
     emailAddress: data.email,
   });
 
+  console.log(embedly, 'after created Customer');
   if (!embedly) return;
 
   await update(userId, {
     embedlyCustomerId: embedly?.id,
   });
 
+  console.log(embedly, 'created Customer');
   const verified = await Embedly.customers.verifyKYC({
     bvn: data.bvn,
     customerId: embedly?.id,
@@ -230,11 +270,12 @@ export async function createEmbedlyUser(userId: string, data: EmbedlyInput) {
 
   const wallet = await createWallet({
     userId: userId,
-    currency: 'NGN',
+    currency: data?.extra?.currency ?? 'NGN',
   });
-
+  console.log(wallet, 'created wallet');
   if (!wallet) return;
 
+  console.log(wallet, 'after before hashed wallet');
   await hashBVN(userId, data?.bvn!);
   return wallet;
 }
@@ -267,4 +308,22 @@ export async function getBVNData(value: BVNInput) {
       middleName: data?.middleName,
     },
   };
+}
+
+export async function captureFingerPrint(
+  id: string,
+  payload: { fingerPrint: string },
+) {
+  // Optionally, hash the fingerprint before saving for security
+  // const hashedFingerPrint = await hashPin(payload.fingerPrint);
+
+  const user = await prisma.user.update({
+    where: { id },
+    data: {
+      fingerPrint: payload.fingerPrint,
+    },
+    include: { address: true },
+  });
+
+  return user;
 }
