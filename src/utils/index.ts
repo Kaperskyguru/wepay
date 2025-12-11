@@ -6,6 +6,7 @@ import otpGenerator from 'otp-generator';
 import sendEmail from '@/extensions/mail-service/send-email';
 import { Akuuk } from '@/extensions/akuuk';
 import { environment } from '@/config/env';
+import crypto from 'crypto';
 
 export function fileDirName(meta: any) {
   const __filename = fileURLToPath(meta.url);
@@ -74,7 +75,7 @@ export async function sendOTP(user: User, type = 'PHONE') {
     Akuuk.sendSMS({
       country: user?.country ?? 'NG',
       number: user.phone,
-      message: `Your WePay verification code is: ${code}`,
+      message: `Your WePay verification code is: ${code}. Thanks you for choosing WePay`,
     }).catch((e) => console.log(e));
 
   if (user.email && type === 'EMAIL')
@@ -189,16 +190,16 @@ export async function checkDailyLimit(
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
-  const totalTransferredToday = await prisma.transfer.aggregate({
-    _sum: { amount: true },
+  const result = await prisma.ledger.aggregate({
+    _sum: { change: true },
     where: {
-      fromWalletId: fromWallet.id,
+      walletId: fromWallet.id,
       createdAt: { gte: todayStart },
-      status: { in: ['PENDING', 'COMPLETED'] },
+      type: 'TRANSFER_DEBIT',
     },
   });
 
-  const transferred = BigInt(totalTransferredToday._sum.amount || 0);
+  const transferred = result._sum.change ? -result._sum.change : 0n;
 
   const tier = fromUser.currentTier as keyof typeof DAILY_LIMITS;
   const dailyLimit = DAILY_LIMITS[tier] || DAILY_LIMITS.TIER_1;
@@ -255,4 +256,10 @@ Desc: ${wrapText(shortenDesc(desc))}
 Avail Bal: ${currency}${formatCurrency(amountInNaira(balance))}
 Date: ${formatDate(date)}
 Thanks for using WePay`;
+}
+
+export function generateUserSafeId(): string {
+  const input = `${Date.now() - Math.random()}`;
+  const hash = crypto.createHash('sha256').update(input).digest('hex');
+  return hash.substring(0, 8).toUpperCase();
 }
